@@ -1,0 +1,67 @@
+#!/bin/bash
+
+domain_name="${1}"
+indent_level='0'
+indent_multiplier='4'
+
+function process_fields () {
+	rr_name="${1}"
+	spf_rr=($(dig "${rr_name}" 'txt' '+short' | awk -F '"' '{ print $2 }' | grep '^v=spf'))
+	
+	for field in "${spf_rr[@]}"
+	do
+		mechanism=$(echo "${field}" | awk -F ':' '{ print $1 }')
+		value=$(echo "${field}" | awk -F ':' '{ print $2 }')
+
+		indent_value=$((${indent_level} * ${indent_multiplier}))
+		padding=$((${indent_value} + 25))
+		
+		if [[ "${mechanism}" = ip* ]]
+		then
+			# if there is no slash, then the value is a single address
+			# and the ptr record can be retrieved
+			if echo "${field}" | grep -ivF '/' > /dev/null 2>&1
+			then
+				ptr_rr=$(dig -x "${value}" +short)
+				[[ -z "${ptr_rr}" ]] && ptr_rr='none'
+				printf "%${indent_value}s%-${padding}s%s\n" '' "${field}" "[${ptr_rr}]"
+			
+			# if the cidr notation is /32 or /128, it is a single address
+			# and the ptr record can be retrieved
+			elif echo "${field}" | egrep '(/32$|/128$)' > /dev/null 2>&1
+			then
+				ip_address=$(echo "${value}" | awk -F '/' '{ print $1 }')
+				ptr_rr=$(dig -x "${value}" +short)
+				[[ -z "${ptr_rr}" ]] && ptr_rr='none'
+				printf "%${indent_value}s%-${padding}s%s\n" '' "${field}" "[${ptr_rr}]"
+
+			# otherwise the value is multiple addresses and thus
+			# there is no ptr record
+			else
+				printf "%${indent_value}s%s\n" '' "${field}"
+			fi
+			
+		else
+			printf "%${indent_value}s%s\n" '' "${field}"
+		fi		
+
+		if [[ "${mechanism}" = 'include' ]]
+		then
+			follow_include "${value}"
+			printf '\n'
+		fi
+		
+	done
+}
+
+function follow_include () {
+	value="${1}"
+	((indent_level++))
+	printf '\n'
+	process_fields "${value}"
+	((indent_level--))
+}
+
+process_fields "${domain_name}"
+
+exit 0
